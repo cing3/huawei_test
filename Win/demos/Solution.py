@@ -324,37 +324,20 @@ def _build_edge_normal_dirs(poly_a, moved_b):
         dirs = [np.array([1.0, 0.0], dtype=np.float64), np.array([0.0, 1.0], dtype=np.float64)]
     return dirs
 
-def _build_candidate_dirs(poly_a, moved_b, include_vertex_pairs=True, max_vertex_pairs=4000):
+def _build_candidate_dirs(poly_a, moved_b):
     keys = set()
-    dirs = _build_edge_normal_dirs(poly_a, moved_b)
-    for d in dirs:
-        _add_direction(d, keys, [])
+    out = []
 
-    # 复制 dirs（上面 _add_direction 只为填 keys，这里不改原列表顺序）
-    out = list(dirs)
+    # 1) 所有边法向（双向）
+    for d in _build_edge_normal_dirs(poly_a, moved_b):
+        _add_direction(d, keys, out)
 
-    if include_vertex_pairs:
-        na = len(poly_a)
-        nb = len(moved_b)
-        total = na * nb
-
-        if total <= max_vertex_pairs:
-            for va in poly_a:
-                for vb in moved_b:
-                    diff = va - vb
-                    n = np.hypot(diff[0], diff[1])
-                    if n <= EPS:
-                        continue
-                    u = diff / n
-                    k1 = (int(round(u[0] * DIR_KEY_SCALE)), int(round(u[1] * DIR_KEY_SCALE)))
-                    if k1 not in keys:
-                        keys.add(k1)
-                        out.append(u)
-                    u2 = -u
-                    k2 = (int(round(u2[0] * DIR_KEY_SCALE)), int(round(u2[1] * DIR_KEY_SCALE)))
-                    if k2 not in keys:
-                        keys.add(k2)
-                        out.append(u2)
+    # 2) 所有顶点差方向（双向）
+    for va in poly_a:
+        for vb in moved_b:
+            diff = va - vb
+            _add_direction(diff, keys, out)
+            _add_direction(-diff, keys, out)
 
     if not out:
         out = [np.array([1.0, 0.0], dtype=np.float64), np.array([0.0, 1.0], dtype=np.float64)]
@@ -431,7 +414,7 @@ def calculate_mtv(poly_a, poly_b, translation):
         if not _convex_overlap_strict(a_clean, moved_b):
             return 0.0, 0.0
 
-        candidate_dirs = _build_edge_normal_dirs(a_clean, moved_b)
+        candidate_dirs = _build_candidate_dirs(a_clean, moved_b)
         best_t = np.inf
         best_v = np.array([0.0, 0.0], dtype=np.float64)
         for d in candidate_dirs:
@@ -460,7 +443,7 @@ def calculate_mtv(poly_a, poly_b, translation):
     if not _polygons_overlap_strict_by_tris(tris_a, tris_b):
         return 0.0, 0.0
 
-    candidate_dirs = _build_candidate_dirs(a_clean, moved_b, include_vertex_pairs=True, max_vertex_pairs=2500)
+    candidate_dirs = _build_candidate_dirs(a_clean, moved_b)
     best_t = np.inf
     best_v = np.array([0.0, 0.0], dtype=np.float64)
 
