@@ -272,7 +272,7 @@ def _min_non_overlap_t_along_dir(tris_a, tris_b_moved, d, current_best=np.inf):
                 intervals.append((s, e))
 
     if not intervals:
-        return 0.0
+        return np.inf
 
     intervals.sort(key=lambda x: (x[0], x[1]))
 
@@ -420,10 +420,9 @@ def calculate_mtv(poly_a, poly_b, translation):
         for d in candidate_dirs:
             seg = _interval_strict_overlap_along_dir(a_clean, moved_b, d)
             if seg is None:
-                t = 0.0
-            else:
-                _, e = seg
-                t = e if e > 0.0 else 0.0
+                continue
+            _, e = seg
+            t = e if e > 0.0 else 0.0
             if t < best_t:
                 best_t = t
                 best_v = d * t
@@ -462,51 +461,54 @@ def calculate_mtv(poly_a, poly_b, translation):
 
 
 def main():
-    # 读取多边形A和B的顶点数
-    line1 = sys.stdin.readline().strip()
-    if not line1:
+    line = sys.stdin.readline()
+    if not line:
         return
-    n1, n2 = map(int, line1.split())
 
-    # 读取多边形的坐标点（框架约定为单行扁平输入）
-    coords_a_raw = list(map(float, sys.stdin.readline().split()))
-    coords_b_raw = list(map(float, sys.stdin.readline().split()))
+    try:
+        n1, n2 = map(int, line.split())
+    except ValueError:
+        return
 
-    poly_a = np.array(coords_a_raw, dtype=np.float64).reshape(n1, 2)
-    poly_b = np.array(coords_b_raw, dtype=np.float64).reshape(n2, 2)
+    poly_a_list = []
+    for _ in range(n1):
+        x, y = map(float, sys.stdin.readline().split())
+        poly_a_list.append((x, y))
 
-    # 读取预处理就绪信号
-    sys.stdin.readline().strip()
+    poly_b_list = []
+    for _ in range(n2):
+        x, y = map(float, sys.stdin.readline().split())
+        poly_b_list.append((x, y))
 
-    # 告诉判题器：预处理完成
+    poly_a = np.array(poly_a_list, dtype=np.float64)
+    poly_b = np.array(poly_b_list, dtype=np.float64)
+
+    ok_response = sys.stdin.readline().strip()
+    if ok_response != "OK":
+        return
+
     print("OK")
     sys.stdout.flush()
 
-    # 读取测试点的数量
     line_k = sys.stdin.readline().strip()
     if not line_k:
         return
     k = int(line_k)
 
-    # 读取所有的平移测试向量
     translations = []
     for _ in range(k):
         tx, ty = map(float, sys.stdin.readline().split())
         translations.append((tx, ty))
 
-    # 读取数据发送完毕的OK信号
-    sys.stdin.readline().strip()
+    ok_response = sys.stdin.readline().strip()
+    if ok_response != "OK":
+        return
 
-    # 开始计算结果
-    results = []
     for t in translations:
         rx, ry = calculate_mtv(poly_a, poly_b, t)
-        results.append((rx, ry))
-
-    # 输出结果
-    print(k)
-    for rx, ry in results:
         print(f"{rx:.5f} {ry:.5f}")
+        sys.stdout.flush()
+
     print("OK")
     sys.stdout.flush()
 
