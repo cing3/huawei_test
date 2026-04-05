@@ -172,6 +172,20 @@ def _project(poly, axis):
     return np.min(vals), np.max(vals)
 
 
+def _poly_bbox(poly):
+    if len(poly) == 0:
+        return np.array([0.0, 0.0]), np.array([0.0, 0.0])
+    return np.min(poly, axis=0), np.max(poly, axis=0)
+
+
+def _bbox_overlap(min_a, max_a, min_b, max_b, eps=EPS):
+    if max_a[0] < min_b[0] - eps or max_b[0] < min_a[0] - eps:
+        return False
+    if max_a[1] < min_b[1] - eps or max_b[1] < min_a[1] - eps:
+        return False
+    return True
+
+
 def _convex_overlap_strict(poly1, poly2):
     axes = _edge_normals(poly1) + _edge_normals(poly2)
     if not axes:
@@ -291,7 +305,7 @@ def _add_direction(vec, keys, dirs):
         dirs.append(u)
 
 
-def _build_candidate_dirs(poly_a, moved_b):
+def _build_edge_normal_dirs(poly_a, moved_b):
     keys = set()
     dirs = []
 
@@ -306,16 +320,45 @@ def _build_candidate_dirs(poly_a, moved_b):
     add_edge_normals(poly_a)
     add_edge_normals(moved_b)
 
-    for va in poly_a:
-        for vb in moved_b:
-            diff = va - vb
-            _add_direction(diff, keys, dirs)
-            _add_direction(-diff, keys, dirs)
-
     if not dirs:
         dirs = [np.array([1.0, 0.0], dtype=np.float64), np.array([0.0, 1.0], dtype=np.float64)]
-
     return dirs
+
+def _build_candidate_dirs(poly_a, moved_b, include_vertex_pairs=True, max_vertex_pairs=4000):
+    keys = set()
+    dirs = _build_edge_normal_dirs(poly_a, moved_b)
+    for d in dirs:
+        _add_direction(d, keys, [])
+
+    # 复制 dirs（上面 _add_direction 只为填 keys，这里不改原列表顺序）
+    out = list(dirs)
+
+    if include_vertex_pairs:
+        na = len(poly_a)
+        nb = len(moved_b)
+        total = na * nb
+
+        if total <= max_vertex_pairs:
+            for va in poly_a:
+                for vb in moved_b:
+                    diff = va - vb
+                    n = np.hypot(diff[0], diff[1])
+                    if n <= EPS:
+                        continue
+                    u = diff / n
+                    k1 = (int(round(u[0] * DIR_KEY_SCALE)), int(round(u[1] * DIR_KEY_SCALE)))
+                    if k1 not in keys:
+                        keys.add(k1)
+                        out.append(u)
+                    u2 = -u
+                    k2 = (int(round(u2[0] * DIR_KEY_SCALE)), int(round(u2[1] * DIR_KEY_SCALE)))
+                    if k2 not in keys:
+                        keys.add(k2)
+                        out.append(u2)
+
+    if not out:
+        out = [np.array([1.0, 0.0], dtype=np.float64), np.array([0.0, 1.0], dtype=np.float64)]
+    return out
 
 
 def _is_convex_polygon(poly):
@@ -349,6 +392,9 @@ def _get_context(poly_a, poly_b):
     convex_a = _is_convex_polygon(a_clean)
     convex_b = _is_convex_polygon(b_clean)
 
+    min_a, max_a = _poly_bbox(a_clean)
+    min_b, max_b = _poly_bbox(b_clean)
+
     ctx = {
         "a_clean": a_clean,
         "b_clean": b_clean,
@@ -356,6 +402,10 @@ def _get_context(poly_a, poly_b):
         "convex_b": convex_b,
         "tris_a": _triangulate_ear_clipping(a_clean),
         "tris_b_base": _triangulate_ear_clipping(b_clean),
+        "bbox_min_a": min_a,
+        "bbox_max_a": max_a,
+        "bbox_min_b": min_b,
+        "bbox_max_b": max_b,
     }
     _CTX_CACHE[key] = ctx
     return ctx
@@ -371,13 +421,17 @@ def calculate_mtv(poly_a, poly_b, translation):
     if len(a_clean) < 3 or len(b_clean) < 3:
         return 0.0, 0.0
 
-    candidate_dirs = _build_candidate_dirs(a_clean, moved_b)
+    min_b = ctx["bbox_min_b"] + shift
+    max_b = ctx["bbox_max_b"] + shift
+    if not _bbox_overlap(ctx["bbox_min_a"], ctx["bbox_max_a"], min_b, max_b):
+        return 0.0, 0.0
 
-    # 快路径：两者均为凸多边形
+    # 快路径：两者均为凸多边形（先判是否重叠，避免无重叠时构造大量候选方向）
     if ctx["convex_a"] and ctx["convex_b"]:
         if not _convex_overlap_strict(a_clean, moved_b):
             return 0.0, 0.0
 
+        candidate_dirs = _build_edge_normal_dirs(a_clean, moved_b)
         best_t = np.inf
         best_v = np.array([0.0, 0.0], dtype=np.float64)
         for d in candidate_dirs:
@@ -406,6 +460,7 @@ def calculate_mtv(poly_a, poly_b, translation):
     if not _polygons_overlap_strict_by_tris(tris_a, tris_b):
         return 0.0, 0.0
 
+    candidate_dirs = _build_candidate_dirs(a_clean, moved_b, include_vertex_pairs=True, max_vertex_pairs=2500)
     best_t = np.inf
     best_v = np.array([0.0, 0.0], dtype=np.float64)
 
@@ -423,61 +478,52 @@ def calculate_mtv(poly_a, poly_b, translation):
     return float(best_v[0]), float(best_v[1])
 
 
-def _read_polygon(reader, n):
-    line = reader.readline().strip()
-    if not line:
-        return np.empty((0, 2), dtype=np.float64)
-
-    vals = list(map(float, line.split()))
-    if len(vals) == 2 * n:
-        return np.array(vals, dtype=np.float64).reshape(n, 2)
-
-    pts = []
-    if len(vals) >= 2:
-        pts.append((vals[0], vals[1]))
-    for _ in range(n - 1):
-        x, y = map(float, reader.readline().split())
-        pts.append((x, y))
-    return np.array(pts, dtype=np.float64)
-
-
 def main():
-    reader = sys.stdin
-
-    line1 = reader.readline().strip()
+    # 读取多边形A和B的顶点数
+    line1 = sys.stdin.readline().strip()
     if not line1:
         return
     n1, n2 = map(int, line1.split())
 
-    poly_a = _read_polygon(reader, n1)
-    poly_b = _read_polygon(reader, n2)
+    # 读取多边形的坐标点（框架约定为单行扁平输入）
+    coords_a_raw = list(map(float, sys.stdin.readline().split()))
+    coords_b_raw = list(map(float, sys.stdin.readline().split()))
 
-    line = reader.readline().strip()
-    if line and line != "OK":
-        try:
-            k = int(line)
-            print("OK")
-            sys.stdout.flush()
-        except ValueError:
-            return
-    else:
-        print("OK")
-        sys.stdout.flush()
-        line_k = reader.readline().strip()
-        if not line_k:
-            return
-        k = int(line_k)
+    poly_a = np.array(coords_a_raw, dtype=np.float64).reshape(n1, 2)
+    poly_b = np.array(coords_b_raw, dtype=np.float64).reshape(n2, 2)
 
+    # 读取预处理就绪信号
+    sys.stdin.readline().strip()
+
+    # 告诉判题器：预处理完成
+    print("OK")
+    sys.stdout.flush()
+
+    # 读取测试点的数量
+    line_k = sys.stdin.readline().strip()
+    if not line_k:
+        return
+    k = int(line_k)
+
+    # 读取所有的平移测试向量
     translations = []
     for _ in range(k):
-        tx, ty = map(float, reader.readline().split())
+        tx, ty = map(float, sys.stdin.readline().split())
         translations.append((tx, ty))
 
+    # 读取数据发送完毕的OK信号
+    sys.stdin.readline().strip()
+
+    # 开始计算结果
+    results = []
     for t in translations:
         rx, ry = calculate_mtv(poly_a, poly_b, t)
-        print(f"{rx:.5f} {ry:.5f}")
-        sys.stdout.flush()
+        results.append((rx, ry))
 
+    # 输出结果
+    print(k)
+    for rx, ry in results:
+        print(f"{rx:.5f} {ry:.5f}")
     print("OK")
     sys.stdout.flush()
 
