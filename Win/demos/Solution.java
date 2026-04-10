@@ -231,6 +231,7 @@ public class Solution {
         }
 
         // ================ 4. solve and output results ===================
+        writer.printf("%d%n", m);
         for (int i = 0; i < m; ++i) {
             Vector2D res = genSolution(testCases.get(i));
             writer.printf("%.5f %.5f%n", res.x, res.y);

@@ -183,6 +183,7 @@ int main()
     }
 
     // ================ 4. solve and output results ===================
+    cout << m << endl;
     for (int i = 0; i < m; ++i) {
         const Vector2D& res = GenSolution(testCases[i]);
         cout << fixed << std::setprecision(5) << res.x << " " << res.y << endl;
