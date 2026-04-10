@@ -6,193 +6,302 @@
 #include <string>
 #include <vector>
 
-struct Vector2D;
-struct Polygon;
-
 using namespace std;
-const double EPS = 1e-6;
 
-struct Vector2D {
+const double EPS = 1e-7;
+
+struct Point {
     double x, y;
-
-    Vector2D(double x = 0, double y = 0) : x(x), y(y) {}
-    Vector2D operator-(const Vector2D& other) const { return Vector2D(x - other.x, y - other.y); }
-    Vector2D operator+(const Vector2D& other) const { return Vector2D(x + other.x, y + other.y); }
-    Vector2D operator*(double scalar) const { return Vector2D(x * scalar, y * scalar); }
-    double Dot(const Vector2D& other) const { return x * other.x + y * other.y; }
-    double Length() const { return std::sqrt(x * x + y * y); }
-    Vector2D Normalize() const
-    {
-        double len = Length();
-        if (len == 0) {
-            return *this;
-        }
-        return Vector2D(x / len, y / len);
-    }
-    Vector2D Perp() const { return Vector2D(-y, x); }
+    Point operator-(const Point& o) const { return {x - o.x, y - o.y}; }
+    Point operator+(const Point& o) const { return {x + o.x, y + o.y}; }
+    Point operator*(double scalar) const { return {x * scalar, y * scalar}; }
 };
 
-struct Polygon {
-    std::vector<Vector2D> vertices;
+typedef vector<Point> Polygon;
 
-    Polygon() = default;
-    Polygon(std::initializer_list<Vector2D> vts) : vertices(vts) {}
-    Vector2D GetCenter() const
-    {
-        Vector2D center(0, 0);
-        if (vertices.empty()) {
-            return center;
-        }
-        for (const auto& v : vertices) {
-            center = center + v;
-        }
-        return center * (1.0 / vertices.size());
+double dist(const Point& a, const Point& b) {
+    return std::hypot(a.x - b.x, a.y - b.y);
+}
+
+double cross_product(const Point& a, const Point& b, const Point& c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+double dot(const Point& v1, const Point& v2) {
+    return v1.x * v2.x + v1.y * v2.y;
+}
+
+double length(const Point& v) {
+    return std::hypot(v.x, v.y);
+}
+
+double area(const Polygon& p) {
+    double a = 0;
+    int n = p.size();
+    for (int i = 0; i < n; ++i) {
+        a += p[i].x * p[(i + 1) % n].y - p[(i + 1) % n].x * p[i].y;
     }
-    void MoveByVec(const Vector2D& vec) {
-        for (auto& v : vertices) {
-            v = v + vec;
+    return a;
+}
+
+void ensure_ccw(Polygon& p) {
+    if (area(p) < 0) std::reverse(p.begin(), p.end());
+}
+
+Polygon remove_collinear(const Polygon& p) {
+    Polygon res;
+    int n = p.size();
+    for (int i = 0; i < n; ++i) {
+        Point prev = p[(i - 1 + n) % n];
+        Point curr = p[i];
+        Point next = p[(i + 1) % n];
+        if (abs(cross_product(prev, curr, next)) > EPS) {
+            res.push_back(curr);
         }
     }
-};
+    return res;
+}
+
+bool point_in_triangle(const Point& pt, const Point& a, const Point& b, const Point& c) {
+    double cp1 = cross_product(a, b, pt);
+    double cp2 = cross_product(b, c, pt);
+    double cp3 = cross_product(c, a, pt);
+    bool has_neg = (cp1 < -EPS) || (cp2 < -EPS) || (cp3 < -EPS);
+    bool has_pos = (cp1 > EPS) || (cp2 > EPS) || (cp3 > EPS);
+    return !(has_neg && has_pos);
+}
+
+vector<Polygon> triangulate(Polygon p) {
+    ensure_ccw(p);
+    p = remove_collinear(p);
+    vector<Polygon> tris;
+    while (p.size() > 3) {
+        int n = p.size();
+        bool ear_found = false;
+        for (int i = 0; i < n; ++i) {
+            int prev = (i - 1 + n) % n;
+            int next = (i + 1) % n;
+            if (cross_product(p[prev], p[i], p[next]) > EPS) { 
+                bool empty = true;
+                for (int j = 0; j < n; ++j) {
+                    if (j == prev || j == i || j == next) continue;
+                    if (point_in_triangle(p[j], p[prev], p[i], p[next])) {
+                        empty = false; break;
+                    }
+                }
+                if (empty) {
+                    tris.push_back({p[prev], p[i], p[next]});
+                    p.erase(p.begin() + i);
+                    ear_found = true;
+                    break;
+                }
+            }
+        }
+        if (!ear_found) {
+            tris.push_back({p[0], p[1], p[2]});
+            p.erase(p.begin() + 1);
+        }
+    }
+    if (p.size() == 3) tris.push_back(p);
+    return tris;
+}
+
+bool try_merge(const Polygon& p1, const Polygon& p2, Polygon& merged) {
+    int e1 = -1, e2 = -1;
+    int n1 = p1.size(), n2 = p2.size();
+    for (int i = 0; i < n1; ++i) {
+        for (int j = 0; j < n2; ++j) {
+            if (dist(p1[i], p2[(j + 1) % n2]) < EPS && dist(p1[(i + 1) % n1], p2[j]) < EPS) {
+                e1 = i; e2 = j; break;
+            }
+        }
+        if (e1 != -1) break;
+    }
+    if (e1 == -1) return false;
+
+    Polygon temp;
+    for (int i = 1; i < n1; ++i) temp.push_back(p1[(e1 + i) % n1]);
+    for (int j = 1; j < n2; ++j) temp.push_back(p2[(e2 + j) % n2]);
+
+    temp = remove_collinear(temp);
+    if (temp.size() < 3) return false;
+
+    int n = temp.size();
+    for (int i = 0; i < n; ++i) {
+        if (cross_product(temp[i], temp[(i + 1) % n], temp[(i + 2) % n]) < -EPS) return false;
+    }
+    merged = temp;
+    return true;
+}
+
+vector<Polygon> convex_decomposition(Polygon p) {
+    vector<Polygon> polys = triangulate(p);
+    bool merged = true;
+    while (merged) {
+        merged = false;
+        for (size_t i = 0; i < polys.size() && !merged; ++i) {
+            for (size_t j = i + 1; j < polys.size() && !merged; ++j) {
+                Polygon m;
+                if (try_merge(polys[i], polys[j], m)) {
+                    polys.erase(polys.begin() + j);
+                    polys.erase(polys.begin() + i);
+                    polys.push_back(m);
+                    merged = true;
+                }
+            }
+        }
+    }
+    return polys;
+}
+
+bool compare_pts(const Point& a, const Point& b) {
+    if (abs(a.x - b.x) > EPS) return a.x < b.x;
+    return a.y < b.y;
+}
+
+Polygon convex_hull(vector<Point>& pts) {
+    int n = pts.size(), k = 0;
+    if (n <= 2) return pts;
+    vector<Point> h(2 * n);
+    sort(pts.begin(), pts.end(), compare_pts);
+    for (int i = 0; i < n; ++i) {
+        while (k >= 2 && cross_product(h[k - 2], h[k - 1], pts[i]) <= 0) k--;
+        h[k++] = pts[i];
+    }
+    for (int i = n - 2, t = k + 1; i >= 0; i--) {
+        while (k >= t && cross_product(h[k - 2], h[k - 1], pts[i]) <= 0) k--;
+        h[k++] = pts[i];
+    }
+    h.resize(k - 1);
+    return h;
+}
+
+Polygon minkowski_diff(const Polygon& A, const Polygon& B) {
+    vector<Point> pts;
+    for (const auto& a : A) {
+        for (const auto& b : B) {
+            pts.push_back({a.x - b.x, a.y - b.y});
+        }
+    }
+    return convex_hull(pts);
+}
+
+bool in_convex(const Point& pt, const Polygon& poly) {
+    int n = poly.size();
+    for (int i = 0; i < n; ++i) {
+        if (cross_product(poly[i], poly[(i + 1) % n], pt) < -1e-6) return false;
+    }
+    return true;
+}
 
 int n1 = 0, n2 = 0, m = 0;
-Polygon polygon1;
-Polygon polygon2;
-vector<Vector2D> testCases;
+Polygon polyA, polyB;
+vector<Polygon> NFP_list;
 
-struct Projection {
-    double min, max;
+struct Cand {
+    Point v;
+    double len;
+    bool operator<(const Cand& o) const { return len < o.len; }
 };
 
-Projection ProjectPolygon(const Polygon& poly, const Vector2D& axis)
-{
-    double minProj = poly.vertices[0].Dot(axis);
-    double maxProj = minProj;
-
-    for (size_t i = 1; i < poly.vertices.size(); ++i) {
-        double proj = poly.vertices[i].Dot(axis);
-        if (proj < minProj) {
-            minProj = proj;
-        }
-        if (proj > maxProj) {
-            maxProj = proj;
+void PreProcess() {
+    vector<Polygon> decompA = convex_decomposition(polyA);
+    vector<Polygon> decompB = convex_decomposition(polyB);
+    for (const auto& a : decompA) {
+        for (const auto& b : decompB) {
+            NFP_list.push_back(minkowski_diff(a, b));
         }
     }
-    return {minProj, maxProj};
 }
 
-Vector2D GenSolution(const Vector2D& vec)
-{
-    Polygon polyB = polygon2;
-    polyB.MoveByVec(vec);
+Point SolveQuery(const Point& P) {
+    bool inside = false;
+    for (const auto& M : NFP_list) {
+        if (in_convex(P, M)) {
+            inside = true; break;
+        }
+    }
+    if (!inside) return {0.0, 0.0}; // 已经不重合
 
-    double minOverlap = std::numeric_limits<double>::infinity();
-    Vector2D smallestAxis;
+    vector<Cand> C;
+    for (const auto& M : NFP_list) {
+        int n = M.size();
+        for (int i = 0; i < n; ++i) {
+            Point a = M[i];
+            Point b = M[(i + 1) % n];
+            
+            // 顶点到P的向量
+            Point v_vert = a - P;
+            C.push_back({v_vert, length(v_vert)});
 
-    const Polygon* polygons[2] = {&polygon1, &polyB};
-
-    for (int i = 0; i < 2; ++i) {
-        const Polygon& currentPoly = *polygons[i];
-        for (size_t j = 0; j < currentPoly.vertices.size(); ++j) {
-            Vector2D p1 = currentPoly.vertices[j];
-            Vector2D p2 = currentPoly.vertices[(j + 1) % currentPoly.vertices.size()];
-            Vector2D edge = p2 - p1;
-
-            Vector2D axis = edge.Perp().Normalize();
-
-            Projection projA = ProjectPolygon(polygon1, axis);
-            Projection projB = ProjectPolygon(polyB, axis);
-
-            if (projA.max <= projB.min || projB.max <= projA.min) {
-                return {0.0, 0.0};
-            }
-
-            double overlap = std::min(projA.max, projB.max) - std::max(projA.min, projB.min);
-
-            if (overlap < minOverlap) {
-                minOverlap = overlap;
-                smallestAxis = axis;
+            // P到边的垂线投影向量
+            Point ab = b - a;
+            Point ap = P - a;
+            double t = dot(ap, ab) / dot(ab, ab);
+            if (t >= 0 && t <= 1) {
+                Point proj = a + (ab * t);
+                Point v_edge = proj - P;
+                C.push_back({v_edge, length(v_edge)});
             }
         }
     }
-    Vector2D centerA = polygon1.GetCenter();
-    Vector2D centerB = polyB.GetCenter();
-    Vector2D dir = centerB - centerA;
+    
+    sort(C.begin(), C.end());
 
-    if (smallestAxis.Dot(dir) < 0.0) {
-        smallestAxis = smallestAxis * -1.0;
+    for (const auto& cand : C) {
+        if (cand.len < 1e-9) continue;
+        
+        Point dir = {cand.v.x / cand.len, cand.v.y / cand.len};
+        // 往外微移一点，避免卡在精度边界上
+        Point test_pt = P + cand.v + (dir * 1e-4);
+
+        bool still_inside = false;
+        for (const auto& M : NFP_list) {
+            if (in_convex(test_pt, M)) {
+                still_inside = true; break;
+            }
+        }
+        if (!still_inside) return cand.v;
     }
-
-    return {smallestAxis * minOverlap};
+    
+    return {0.0, 0.0};
 }
 
-// 选手在规定的时间内进行预处理，完成后返回OK
-void PreProcess()
-{
-    // player can perform preprocessing here
-}
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
 
-int main()
-{
-    // =============== 1. read polygons ===================
-    cin >> n1 >> n2;
+    if (!(cin >> n1 >> n2)) return 0;
 
-    if (n1 <= 0 || n2 <= 0) {
-        cerr << "Input data error: the number of vertices of both polygons should be greater than 2" << endl;
-        return 1;
-    }
+    polyA.resize(n1);
+    for (int i = 0; i < n1; ++i) cin >> polyA[i].x >> polyA[i].y;
 
-    polygon1.vertices.resize(n1);
-    for (int i = 0; i < n1; ++i) {
-        cin >> polygon1.vertices[i].x >> polygon1.vertices[i].y;
-    }
+    polyB.resize(n2);
+    for (int i = 0; i < n2; ++i) cin >> polyB[i].x >> polyB[i].y;
 
-    polygon2.vertices.resize(n2);
-    for (int i = 0; i < n2; ++i) {
-        cin >> polygon2.vertices[i].x >> polygon2.vertices[i].y;
-    }
-
-    // wait for OK to ensure all polygon data is received
     string okResp;
     cin >> okResp;
-    if (okResp != "OK") {
-        cerr << "Input data error: waiting for OK after obtaining polygons but I get " << okResp << endl;
-        return 0;
-    }
+    if (okResp != "OK") return 0;
 
-    // ============== 2. preprocess ===================
     PreProcess();
-    // send OK after finishing preprocessing
-    cout << "OK" << endl;
+
+    cout << "OK\n";
     cout.flush();
 
-    // ============== 3. read test data ===================
     cin >> m;
-    testCases.resize(m);
+    vector<Point> queries(m);
+    for (int i = 0; i < m; ++i) cin >> queries[i].x >> queries[i].y;
 
-    for (int i = 0; i < m; ++i) {
-        cin >> testCases[i].x >> testCases[i].y;
-    }
-
-    // wait for OK to ensure all test cases are received
     cin >> okResp;
-    if (okResp != "OK") {
-        cerr << "Input data error: waiting for OK after that I have received all test points but I get " << okResp
-             << endl;
-        return 0;
-    }
+    if (okResp != "OK") return 0;
 
-    // ================ 4. solve and output results ===================
-    cout << m << endl;
+    cout << m << "\n";
     for (int i = 0; i < m; ++i) {
-        const Vector2D& res = GenSolution(testCases[i]);
-        cout << fixed << std::setprecision(5) << res.x << " " << res.y << endl;
-        cout.flush();
+        Point res = SolveQuery(queries[i]);
+        cout << fixed << setprecision(5) << res.x << " " << res.y << "\n";
     }
 
-    // send OK after outputting all answer
-    cout << "OK" << endl;
+    cout << "OK\n";
     cout.flush();
-
     return 0;
 }
